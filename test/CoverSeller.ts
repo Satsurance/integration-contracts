@@ -173,4 +173,25 @@ describe("CoverSeller", function () {
             sig.s
         )).to.be.revertedWith("CoverSeller: Invalid chain ID");
     });
+
+    it("Should not allow collector to withdraw premiums from awaiting covers", async function () {
+        const { coverSeller, mockToken, owner, admin, collector, user } = await loadFixture(basicFixture);
+
+        // Create cover using the utility function
+        const { coverId, requestData } = await createCover({
+            coverSeller,
+            mockToken,
+            admin,
+            user
+        });
+
+        // Verify awaiting payments is updated with the premium amount
+        expect(await coverSeller.awaitingPayments(await mockToken.getAddress())).to.equal(requestData.amount);
+
+        // Try to withdraw the premium amount while cover is still awaiting approval
+        await expect(coverSeller.connect(collector).collectPremium(
+            await mockToken.getAddress(),
+            requestData.amount
+        )).to.be.revertedWith("CoverSeller: Insufficient available balance");
+    });
 }); 
