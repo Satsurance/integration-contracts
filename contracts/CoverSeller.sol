@@ -49,9 +49,11 @@ struct RequestData {
     CoverRequest coverRequest;
     ERC20 asset;
     uint256 amount;
+    uint256 chainId;
+    uint256 timeout;
 }
 
-contract CoverSellerV1 is
+contract CoverSeller is
     Initializable,
     ContextUpgradeable,
     UUPSUpgradeable,
@@ -89,7 +91,11 @@ contract CoverSellerV1 is
         _disableInitializers();
     }
 
-    function initialize(address owner) public initializer {
+    function initialize(
+        address owner,
+        address admin,
+        address collector
+    ) public initializer {
         __Context_init();
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
@@ -98,8 +104,8 @@ contract CoverSellerV1 is
 
         // Setup roles
         _grantRole(OWNER_ROLE, owner);
-        _grantRole(ADMIN_ROLE, owner);
-        _grantRole(COLLECTOR_ROLE, owner);
+        _grantRole(ADMIN_ROLE, admin);
+        _grantRole(COLLECTOR_ROLE, collector);
 
         coverCounter = 0;
     }
@@ -118,6 +124,15 @@ contract CoverSellerV1 is
         bytes32 r,
         bytes32 s
     ) external nonReentrant whenNotPaused returns (uint256) {
+        require(
+            requestData.chainId == block.chainid,
+            "CoverSeller: Invalid chain ID"
+        );
+        require(
+            requestData.timeout > block.timestamp,
+            "CoverSeller: Signature expired"
+        );
+
         // Create message hash that admin should have signed
         bytes32 messageHash = keccak256(abi.encode(requestData));
 
