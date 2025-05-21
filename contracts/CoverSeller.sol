@@ -1,12 +1,19 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
+import "@openzeppelin/contracts/utils/Base64.sol";
 
 enum CoverStatus {
     NOT_CREATED,
@@ -59,8 +66,11 @@ contract CoverSeller is
     UUPSUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    AccessControlUpgradeable
+    AccessControlUpgradeable,
+    ERC721EnumerableUpgradeable
 {
+    using Strings for uint256;
+
     bytes32 public constant OWNER_ROLE = keccak256("OWNER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant COLLECTOR_ROLE = keccak256("COLLECTOR_ROLE");
@@ -69,6 +79,8 @@ contract CoverSeller is
     mapping(uint256 => Cover) public covers;
     mapping(uint256 => RefundData) public refundData;
     mapping(address => uint256) public awaitingPayments;
+
+    string public baseImageURI;
 
     event CoverRequested(
         uint256 indexed coverId,
@@ -101,13 +113,19 @@ contract CoverSeller is
         __ReentrancyGuard_init();
         __Pausable_init();
         __AccessControl_init();
+        __ERC721_init("Insurance Cover", "COVER");
+        __ERC721Enumerable_init();
 
         // Setup roles
         _grantRole(OWNER_ROLE, owner);
         _grantRole(ADMIN_ROLE, admin);
         _grantRole(COLLECTOR_ROLE, collector);
 
+        _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
+        _setRoleAdmin(COLLECTOR_ROLE, COLLECTOR_ROLE);
+
         coverCounter = 0;
+        baseImageURI = "";
     }
 
     /**
@@ -182,6 +200,9 @@ contract CoverSeller is
         // Update awaiting payments
         awaitingPayments[address(requestData.asset)] += requestData.amount;
 
+        // Mint NFT to purchaser
+        _safeMint(_msgSender(), coverId);
+
         // Emit event
         emit CoverRequested(coverId, _msgSender(), requestData.amount);
 
@@ -242,6 +263,9 @@ contract CoverSeller is
         // Update awaiting payments
         awaitingPayments[refundDataItem.tokenAddress] -= refundAmount;
 
+        // Burn the NFT
+        _burn(coverId);
+
         // Transfer funds back to purchaser
         require(
             asset.transfer(cover.purchaser, refundAmount),
@@ -281,4 +305,84 @@ contract CoverSeller is
     function _authorizeUpgrade(
         address newImplementation
     ) internal override onlyRole(OWNER_ROLE) {}
+
+    /// @dev Returns true if this contract implements the interface defined
+    ///      by `interfaceId`.
+    function supportsInterface(
+        bytes4 interfaceId
+    )
+        public
+        view
+        virtual
+        override(ERC721EnumerableUpgradeable, AccessControlUpgradeable)
+        returns (bool)
+    {
+        return
+            ERC721EnumerableUpgradeable.supportsInterface(interfaceId) ||
+            AccessControlUpgradeable.supportsInterface(interfaceId);
+    }
+
+    /**
+     * @dev Returns the Uniform Resource Identifier (URI) for `tokenId` token.
+     * @param tokenId The ID of the token to get the URI for
+     * @return The URI for the given token ID
+     */
+    function tokenURI(
+        uint256 tokenId
+    ) public view virtual override returns (string memory) {
+        require(
+            _ownerOf(tokenId) != address(0),
+            "CoverSeller: URI query for nonexistent token"
+        );
+
+        Cover memory cover = covers[tokenId];
+
+        bytes memory json = abi.encodePacked(
+            "{",
+            '"name": "Insurance Cover #',
+            tokenId.toString(),
+            '",',
+            '"description": "Insurance cover NFT for ',
+            cover.provider,
+            '",',
+            '"image": "',
+            baseImageURI,
+            tokenId.toString(),
+            '"',
+            "}"
+        );
+
+        return
+            string(
+                abi.encodePacked(
+                    "data:application/json;base64,",
+                    Base64.encode(json)
+                )
+            );
+    }
+
+    /**
+     * @dev Sets the base URI for the NFT images
+     * @param _baseImageURI The new base URI for NFT images
+     */
+    function setBaseImageURI(
+        string memory _baseImageURI
+    ) external onlyRole(OWNER_ROLE) {
+        baseImageURI = _baseImageURI;
+    }
+
+    /**
+     * @dev Override _transfer to make the NFT soulbound (non-transferable)
+     */
+    function transferFrom(
+        address from,
+        address to,
+        uint256 tokenId
+    ) public virtual override(ERC721Upgradeable, IERC721) {
+        require(
+            from == address(0) || to == address(0),
+            "CoverSeller: Token is soulbound and cannot be transferred"
+        );
+        super._transfer(from, to, tokenId);
+    }
 }

@@ -194,4 +194,94 @@ describe("CoverSeller", function () {
             requestData.amount
         )).to.be.revertedWith("CoverSeller: Insufficient available balance");
     });
+
+    it("Should mint NFT to purchaser when cover is requested", async function () {
+        const { coverSeller, mockToken, owner, admin, collector, user } = await loadFixture(basicFixture);
+
+        // Create cover using the utility function
+        const { coverId, requestData } = await createCover({
+            coverSeller,
+            mockToken,
+            admin,
+            user
+        });
+
+        // Verify NFT ownership
+        expect(await coverSeller.ownerOf(coverId)).to.equal(user.address);
+        expect(await coverSeller.balanceOf(user.address)).to.equal(1);
+    });
+
+    it("Should generate correct token URI", async function () {
+        const { coverSeller, mockToken, owner, admin, collector, user } = await loadFixture(basicFixture);
+
+        // Set base image URI
+        const baseImageURI = "https://example.com/nft/";
+        await coverSeller.connect(owner).setBaseImageURI(baseImageURI);
+
+        // Create cover using the utility function
+        const { coverId, requestData } = await createCover({
+            coverSeller,
+            mockToken,
+            admin,
+            user
+        });
+
+        // Get token URI
+        const tokenURI = await coverSeller.tokenURI(coverId);
+
+        // URI should be a data URI with base64 encoded JSON
+        expect(tokenURI).to.include("data:application/json;base64,");
+
+        // Decode the base64 content
+        const base64Content = tokenURI.split(",")[1];
+        const decodedContent = Buffer.from(base64Content, "base64").toString();
+        const metadata = JSON.parse(decodedContent);
+
+        // Verify metadata structure
+        expect(metadata.name).to.equal(`Insurance Cover #${coverId}`);
+        expect(metadata.description).to.include(requestData.coverRequest.provider);
+        expect(metadata.image).to.equal(`${baseImageURI}${coverId}`);
+    });
+
+    it("Should not allow NFT transfer (soulbound)", async function () {
+        const { coverSeller, mockToken, owner, admin, collector, user } = await loadFixture(basicFixture);
+
+        // Create cover using the utility function
+        const { coverId, requestData } = await createCover({
+            coverSeller,
+            mockToken,
+            admin,
+            user
+        });
+
+        // Try to transfer the NFT to another address (should fail)
+        const [, , , , anotherUser] = await ethers.getSigners();
+        await expect(
+            coverSeller.connect(user).transferFrom(user.address, anotherUser.address, coverId)
+        ).to.be.revertedWith("CoverSeller: Token is soulbound and cannot be transferred");
+    });
+
+    it("Should burn NFT when cover is refunded", async function () {
+        const { coverSeller, mockToken, owner, admin, collector, user } = await loadFixture(basicFixture);
+
+        // Create cover using the utility function
+        const { coverId, requestData } = await createCover({
+            coverSeller,
+            mockToken,
+            admin,
+            user
+        });
+
+        // Verify NFT exists
+        expect(await coverSeller.ownerOf(coverId)).to.equal(user.address);
+
+        // Refund the cover (which should burn the NFT)
+        await coverSeller.connect(admin).refundCover(coverId);
+
+        // Verify NFT is burned
+        await expect(coverSeller.ownerOf(coverId)).to.be.revertedWithCustomError(
+            coverSeller, "ERC721NonexistentToken"
+        ).withArgs(coverId);
+        expect(await coverSeller.balanceOf(user.address)).to.equal(0);
+    });
 }); 
