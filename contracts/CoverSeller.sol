@@ -383,6 +383,6 @@ contract CoverSeller is
             from == address(0) || to == address(0),
             "CoverSeller: Token is soulbound and cannot be transferred"
         );
-        super._transfer(from, to, tokenId);
+        super.transferFrom(from, to, tokenId);
     }
 }
